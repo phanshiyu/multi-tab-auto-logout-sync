@@ -11,6 +11,10 @@
 - Auto logout should save redirect url so that when user logs in he is brought back to where he was
 
 ## Running the POC
+### Netlify Demo
+[Netlify demo](https://zingy-zuccutto-4b7fe4.netlify.app/)
+
+### Locally
 ```
 npm i
 npm run dev
