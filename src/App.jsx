@@ -1,47 +1,25 @@
+import { useCallback, useEffect, useState } from "react";
 import { useLocalStorage } from "usehooks-ts";
 import "./App.css";
-import { useCallback, useEffect, useState, useMemo } from "react";
 
-const LOCAL_STORAGE_COUNT_DOWN_KEY = "countDown";
+const LOCAL_STORAGE_COUNT_DOWN_END_TS_KEY = "countDownEndTs";
 const LOCAL_STORAGE_KEY_LAST_ACTIVE = "lastActive";
 
 const getCountDownFromLocalStorage = () => {
-  const rawValueInStorage = localStorage.getItem(LOCAL_STORAGE_COUNT_DOWN_KEY);
-  if (!rawValueInStorage) return;
+  const countDownEndTs = localStorage.getItem(
+    LOCAL_STORAGE_COUNT_DOWN_END_TS_KEY
+  );
 
-  const sessionCountdown = JSON.parse(rawValueInStorage);
+  if (!countDownEndTs) return; // no countdown in progress
 
-  return sessionCountdown;
-};
+  const timeLeft = countDownEndTs - Date.now();
+  if (timeLeft <= 0) return 0; // countdown has ended
 
-const decrementCountdownInLocalStorage = () => {
-  const sessionCountdown = getCountDownFromLocalStorage();
-
-  if (!sessionCountdown) return;
-
-  const timeSinceLastUpdate = Date.now() - sessionCountdown.lastUpdated;
-  if (timeSinceLastUpdate >= 1000) {
-    if (sessionCountdown.count === 0) return;
-
-    let newCount = sessionCountdown.count - 1;
-
-    localStorage.setItem(
-      LOCAL_STORAGE_COUNT_DOWN_KEY,
-      JSON.stringify({
-        count: newCount,
-        lastUpdated: sessionCountdown.lastUpdated + 1000,
-      })
-    );
-  }
+  return parseInt(timeLeft / 1000);
 };
 
 function useIsIdle(idleTime) {
-  const [isIdle, setIdle] = useState(
-    localStorage.getItem(LOCAL_STORAGE_KEY_LAST_ACTIVE)
-      ? Date.now() - localStorage.getItem(LOCAL_STORAGE_KEY_LAST_ACTIVE) >
-          idleTime
-      : true
-  );
+  const [isIdle, setIdle] = useState(false);
 
   useEffect(() => {
     const updateActive = () => {
@@ -91,51 +69,51 @@ function useIsIdle(idleTime) {
 }
 
 function useCountDown(seconds) {
-  const [countDown, setCountDown] = useState(
-    getCountDownFromLocalStorage()?.count
-  );
+  const [countDown, setCountDown] = useState(getCountDownFromLocalStorage());
 
-  // effect to keep the countdown in sync with local storage
   useEffect(() => {
-    const updateCountDownState = () => {
-      const countDown = getCountDownFromLocalStorage();
-      setCountDown(countDown?.count);
-    };
+    // start counting down if there is a countdown in progress
+    let timeout;
+    if (countDown > 0) {
+      timeout = setTimeout(() => {
+        setCountDown(getCountDownFromLocalStorage());
+      }, 1000);
+    }
 
-    const updateCountDownStateInterval = setInterval(updateCountDownState, 500);
-
-    window.addEventListener("storage", updateCountDownState);
-
-    return () => {
-      clearInterval(updateCountDownStateInterval);
-      window.removeEventListener("storage", updateCountDownState);
-    };
-  }, []);
+    () => clearTimeout(timeout);
+  }, [countDown]);
 
   const startCountDown = useCallback(() => {
     // check if there is already a countdown in progress
-    const countDown = getCountDownFromLocalStorage();
-    if (countDown) return;
+    let countDown = getCountDownFromLocalStorage();
+    if (!countDown) {
+      countDown = seconds;
+      localStorage.setItem(
+        LOCAL_STORAGE_COUNT_DOWN_END_TS_KEY,
+        Date.now() + seconds * 1000
+      );
+    }
 
-    localStorage.setItem(
-      LOCAL_STORAGE_COUNT_DOWN_KEY,
-      JSON.stringify({
-        count: seconds,
-        lastUpdated: Date.now(),
-      })
-    );
+    setCountDown(countDown);
   }, [seconds]);
 
   const clearCountDown = useCallback(() => {
-    localStorage.removeItem(LOCAL_STORAGE_COUNT_DOWN_KEY);
+    localStorage.removeItem(LOCAL_STORAGE_COUNT_DOWN_END_TS_KEY);
+    setCountDown(undefined);
   }, []);
 
   useEffect(() => {
-    const decrementInterval = setInterval(
-      decrementCountdownInLocalStorage,
-      500
-    );
-    return () => clearInterval(decrementInterval);
+    const handleStorage = (event) => {
+      if (event.key === LOCAL_STORAGE_COUNT_DOWN_END_TS_KEY) {
+        setCountDown(getCountDownFromLocalStorage());
+      }
+    };
+
+    window.addEventListener("storage", handleStorage);
+
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+    };
   }, []);
 
   return {
@@ -145,29 +123,29 @@ function useCountDown(seconds) {
   };
 }
 
+const logoutBroadcastChannel = new BroadcastChannel("logout-channel");
+
 function App() {
   const [loggedIn, setLoggedIn] = useLocalStorage("login", false);
   const [logoutType, setLogoutType] = useState();
-  const logoutBroadcastChannel = useMemo(
-    () => new BroadcastChannel("logout-channel"),
-    []
-  );
+
   const isIdle = useIsIdle(5000);
   const { countDown, clearCountDown, startCountDown } = useCountDown(5);
 
-  useEffect(() => {
-    if (loggedIn) setLogoutType(undefined);
-  }, [loggedIn]);
 
-  const handleLogoutClick = useCallback(
+  const handleLogout = useCallback(
     (type) => {
       setLoggedIn(false);
       clearCountDown();
       setLogoutType(type);
       logoutBroadcastChannel.postMessage({ type });
     },
-    [clearCountDown, setLoggedIn, logoutBroadcastChannel]
+    [clearCountDown, setLoggedIn]
   );
+
+  useEffect(() => {
+    if (loggedIn) setLogoutType(undefined);
+  }, [loggedIn]);
 
   // listen for logout events from other tabs
   useEffect(() => {
@@ -180,9 +158,9 @@ function App() {
     logoutBroadcastChannel.onmessage = logoutUser;
 
     return () => {
-      logoutBroadcastChannel.close();
+      logoutBroadcastChannel.onmessage = undefined;
     };
-  }, [clearCountDown, setLoggedIn, logoutBroadcastChannel]);
+  }, [clearCountDown, setLoggedIn]);
 
   // start count down on idle + user is logged in
   useEffect(() => {
@@ -194,9 +172,9 @@ function App() {
   // log user out when count down hits 0
   useEffect(() => {
     if (loggedIn && countDown === 0) {
-      handleLogoutClick("session-expired");
+      handleLogout("session-expired");
     }
-  }, [clearCountDown, loggedIn, countDown, setLoggedIn, handleLogoutClick]);
+  }, [countDown, handleLogout, loggedIn]);
 
   const renderedIdleStatus = isIdle ? (
     <span style={{ color: "red" }}>idle</span>
@@ -218,7 +196,7 @@ function App() {
         }}
       >
         <p>Logging you out in {countDown}</p>
-          <button onClick={() => handleLogoutClick("explicit-logout")}>Logout</button>
+        <button onClick={() => handleLogout("explicit-logout")}>Logout</button>
         <form method="dialog">
           <button type="submit">Stay logged in</button>
         </form>
@@ -237,7 +215,7 @@ function App() {
             </button>
           </>
         ) : (
-          <button onClick={() => handleLogoutClick("explicit-logout")}>
+          <button onClick={() => handleLogout("explicit-logout")}>
             Logout
           </button>
         )}
