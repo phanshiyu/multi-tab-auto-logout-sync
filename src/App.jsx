@@ -20,11 +20,18 @@ const getCountDownFromLocalStorage = () => {
 
 function useIsIdle(idleTime) {
   const [isIdle, setIdle] = useState(false);
+  const [idleTimeInMs, setIdleTimeInMs] = useState(
+    Date.now() - (localStorage.getItem(LOCAL_STORAGE_KEY_LAST_ACTIVE) ?? 0) >
+      idleTime
+      ? Date.now() - (localStorage.getItem(LOCAL_STORAGE_KEY_LAST_ACTIVE) ?? 0)
+      : 0
+  );
 
   useEffect(() => {
     const updateActive = () => {
       localStorage.setItem(LOCAL_STORAGE_KEY_LAST_ACTIVE, Date.now());
       setIdle(false);
+      setIdleTimeInMs(0);
     };
 
     // update active on mount
@@ -49,10 +56,18 @@ function useIsIdle(idleTime) {
     // keep is idle state in sync with local storage
     function updateIsIdle() {
       setIdle(
-        localStorage.getItem(LOCAL_STORAGE_KEY_LAST_ACTIVE)
-          ? Date.now() - localStorage.getItem(LOCAL_STORAGE_KEY_LAST_ACTIVE) >
-              idleTime
-          : true
+        Date.now() -
+          (localStorage.getItem(LOCAL_STORAGE_KEY_LAST_ACTIVE) ?? 0) >
+          idleTime
+      );
+
+      setIdleTimeInMs(
+        Date.now() -
+          (localStorage.getItem(LOCAL_STORAGE_KEY_LAST_ACTIVE) ?? 0) >
+          idleTime
+          ? Date.now() -
+              (localStorage.getItem(LOCAL_STORAGE_KEY_LAST_ACTIVE) ?? 0)
+          : 0
       );
     }
 
@@ -65,7 +80,7 @@ function useIsIdle(idleTime) {
     };
   }, [idleTime]);
 
-  return isIdle;
+  return { isIdle, idleTimeInMs };
 }
 
 function useCountDown(seconds) {
@@ -129,9 +144,8 @@ function App() {
   const [loggedIn, setLoggedIn] = useLocalStorage("login", false);
   const [logoutType, setLogoutType] = useState();
 
-  const isIdle = useIsIdle(5000);
+  const { isIdle, idleTimeInMs } = useIsIdle(5000);
   const { countDown, clearCountDown, startCountDown } = useCountDown(5);
-
 
   const handleLogout = useCallback(
     (type) => {
@@ -171,10 +185,10 @@ function App() {
 
   // log user out when count down hits 0
   useEffect(() => {
-    if (loggedIn && countDown === 0) {
+    if (loggedIn && (countDown === 0 || idleTimeInMs > 10000)) {
       handleLogout("session-expired");
     }
-  }, [countDown, handleLogout, loggedIn]);
+  }, [countDown, handleLogout, loggedIn, idleTimeInMs]);
 
   const renderedIdleStatus = isIdle ? (
     <span style={{ color: "red" }}>idle</span>
@@ -187,7 +201,8 @@ function App() {
 
   return (
     <>
-      {renderedIdleStatus}
+      <p>{renderedIdleStatus}</p>
+      <p>idle time: {idleTimeInMs} ms</p>
       {logoutMessage}
       <dialog
         open={Boolean(countDown)}
